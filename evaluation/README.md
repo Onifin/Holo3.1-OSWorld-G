@@ -64,6 +64,57 @@ flags are needed. Weights are never baked into the image; mount them at `/models
 Pass `--build-arg VLLM_TAG=<tag>` at build time to match the vLLM version your
 checkpoint needs.
 
+## Breaking a run down by application
+
+OSWorld-G groups its items by GUI element type -- `benchmark/buckets.json` maps
+`Label` to `text_matching`, `Icon`/`Image`/`Button` to `element_recognition`, and
+so on -- and the annotations carry no field saying which application is on screen.
+
+`benchmark/app_labels.json` adds one. Every one of the 251 screenshots was
+labelled by reading the application name out of the GNOME top bar in the image
+itself, so these are read labels rather than keywords guessed from the
+instruction text. The categories are the eight OSWorld domains, and `null` for
+items in applications outside that set:
+
+| category | items | screenshots |
+| --- | ---: | ---: |
+| Chrome | 94 | 51 |
+| LibreOffice Impress | 90 | 31 |
+| LibreOffice Calc | 81 | 29 |
+| GIMP | 77 | 29 |
+| LibreOffice Writer | 42 | 23 |
+| OS | 41 | 19 |
+| VsCode | 39 | 21 |
+| VLC | 38 | 19 |
+| `null` | 62 | 29 |
+| **total** | **564** | **251** |
+
+`OS` covers the desktop environment itself: terminal (13), file manager (10),
+settings (10), the Activities overview (6) and the login screen (2). `null`
+covers Thunderbird (24), Evince (20), Gedit (6), Totem (5), Ubuntu Software (3),
+Image Viewer (3) and the LibreOffice Start Center (1) -- note that Thunderbird is
+a domain of its own in OSWorld, so promote it to a category of its own if you
+are comparing against numbers from there.
+
+`accuracy_by_app.py` joins those labels with the `*_preds.json` a run writes:
+
+```bash
+python accuracy_by_app.py /results/dense_preds.json --exclude_refusal
+```
+
+Pass two files to get them side by side with a per-application delta, which is
+the view worth having when comparing a pruned checkpoint against its baseline:
+
+```bash
+python accuracy_by_app.py /results/dense_preds.json /results/pruned_preds.json --exclude_refusal
+```
+
+`--exclude_refusal` drops the 54 refusal items. They are worth dropping from a
+comparison: answering one correctly requires the model to decline to point at
+anything, and grounding-specialised models simply do not -- Holo-3.1-35B-A3B
+scores 0/54, emitting a valid coordinate every time, with or without a refusal
+clause in the prompt and with or without constrained decoding.
+
 ## Other closed source models on OSWorld-G
 You can also evaluate other closed-source models on OSWorld-G. An example with Operator is provided in `operator_osworld_g.py`.
 
