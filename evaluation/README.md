@@ -44,6 +44,26 @@ Holo returns a click point as JSON (`{"x": ..., "y": ...}`) normalized to `[0, 1
 - `--structured_output {json_schema,guided_json,none}` selects how the JSON is constrained server-side; use `guided_json` on vLLM builds without `response_format` support.
 - `--use_cache` reuses responses between runs, `--output_path` writes per-item predictions.
 
+### Running it in Docker
+
+`Dockerfile` at the repository root builds an image with vLLM, the runner and the
+benchmark data. Build from the repository root:
+
+```bash
+docker build -t osworld-g-holo .
+```
+
+Then mount the checkpoint and a results directory:
+
+```bash
+docker run --rm --gpus all --ipc=host --shm-size=16g -v /models/Holo-3.1-pruned:/models/holo:ro -v "$PWD/results":/results --user "$(id -u):$(id -g)" osworld-g-holo --model_path /models/holo --model_name holo-pruned --use_cache --output_path /results/preds.json
+```
+
+The three benchmark paths default to their in-image locations, so only the model
+flags are needed. Weights are never baked into the image; mount them at `/models`.
+Pass `--build-arg VLLM_TAG=<tag>` at build time to match the vLLM version your
+checkpoint needs.
+
 ## Other closed source models on OSWorld-G
 You can also evaluate other closed-source models on OSWorld-G. An example with Operator is provided in `operator_osworld_g.py`.
 

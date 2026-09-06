@@ -1,0 +1,24 @@
+# The evaluation needs benchmark/ and evaluation/ and nothing else.
+.git/
+.gitignore
+dataset/
+readme-images/
+demo.py
+demo_image.png
+agent_function_call.py
+Dockerfile
+.dockerignore
+
+# Leading **/ matters: a bare `__pycache__/` would only match at the context
+# root, leaving evaluation/__pycache__ in the image.
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/.env
+
+# Never bake weights or run outputs into the image -- they are volumes.
+**/models/
+**/results/
+**/*.safetensors
+**/*.bin
+**/*prediction_cache.json

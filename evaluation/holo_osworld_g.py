@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import time
@@ -70,8 +71,31 @@ REFUSAL_CLAUSE = (
     " * If no element on the image corresponds to the target, output null for both x and y.\n"
 )
 
+# `explicit` bolts the refusal clause onto a prompt whose first sentence already
+# takes the element's existence for granted, and the model never once used the
+# null. This variant makes presence the first decision instead of an aside: the
+# opening sentence is conditional, the absence case leads the bullets, and
+# guessing the nearest match is ruled out by name. Same schema, same output
+# format, same cadence as the documented prompt -- only the framing moves.
+CONDITIONAL_PROMPT = (
+    "Decide whether the target element is present on the GUI image, and output a "
+    "click position only if it is.\n"
+    " * The target may not be present at all. If no element on the image "
+    "corresponds to the target, output null for both x and y -- do not fall back "
+    "to the closest or most similar element.\n"
+    " * You must output a valid JSON following the format: {schema}\n"
+    " Your target is:\n{element}"
+)
+
 
 def build_prompt(instruction, refusal_type):
+    """Return the prompt and the schema the server should constrain against."""
+    if refusal_type == "conditional":
+        schema = REFUSAL_SCHEMA
+        return CONDITIONAL_PROMPT.format(
+            schema=json.dumps(schema), element=instruction
+        ), schema
+
     schema = REFUSAL_SCHEMA if refusal_type == "explicit" else LOCALIZATION_SCHEMA
     prompt = LOCALIZATION_PROMPT.format(
         schema=json.dumps(schema), element=instruction
@@ -207,13 +231,14 @@ class HoloVLLM:
 
 class BenchmarkRunner:
     def __init__(self, annotation_path, image_dir, classification_path, model,
-                 use_cache=False, output_path=None):
+                 use_cache=False, output_path=None, cache_dir="."):
         self.annotation_path = annotation_path
         self.image_dir = image_dir
         self.classification_path = classification_path
         self.model = model
         self.use_cache = use_cache
         self.output_path = output_path
+        self.cache_dir = cache_dir
 
     def load_annotations(self):
         with open(self.annotation_path, "r") as f:
@@ -245,11 +270,12 @@ class BenchmarkRunner:
         return flatten_data_items
 
     def _cache_file(self):
-        return (
+        name = (
             self.model.model_name.replace("/", "_")
             + self.annotation_path.replace("/", "_").replace(".json", ".cache")
             + f"_{self.model.refusal_type}_prediction_cache.json"
         )
+        return os.path.join(self.cache_dir, name)
 
     def evaluate(self):
         items = self.load_annotations()
@@ -297,6 +323,7 @@ class BenchmarkRunner:
             for instance, response in zip(instances, responses):
                 predictions_cache[instance["instance_id"]] = (response or "").strip()
             if self.use_cache:
+                os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
                 with open(cache_file, "w") as f:
                     json.dump(predictions_cache, f)
 
@@ -367,7 +394,8 @@ class BenchmarkRunner:
         return results
 
 
-def start_vllm_service(ckpt_path, port, model_name, max_model_len):
+def start_vllm_service(ckpt_path, port, model_name, max_model_len,
+                       max_num_seqs, extra=""):
     command = [
         "vllm",
         "serve",
@@ -384,7 +412,18 @@ def start_vllm_service(ckpt_path, port, model_name, max_model_len):
         str(max_model_len),
         "--limit-mm-per-prompt",
         json.dumps({"image": 1}),
+        # The runner never has more than --max_workers requests in flight, so
+        # the server's default batch width is pure waste -- and on the hybrid
+        # Qwen3.5-MoE checkpoints it is fatal: every decode sequence holds a
+        # Mamba state block, and asking for 1024 of them exceeds what fits,
+        # which aborts CUDA graph capture before the server ever listens.
+        "--max-num-seqs",
+        str(max_num_seqs),
     ]
+    # Anything else the checkpoint needs -- --gpu-memory-utilization above all,
+    # since 70 GB of bf16 weights leave little room under the 0.9 default.
+    command += shlex.split(extra)
+    print("[vllm] " + " ".join(command), flush=True)
     return subprocess.Popen(command)
 
 
@@ -413,12 +452,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Evaluate a Holo model on OSWorld-G via a local vLLM server."
     )
-    parser.add_argument("--annotation_path", type=str, required=True,
-                        help="Path to the annotation file (e.g., ../benchmark/OSWorld-G.json).")
-    parser.add_argument("--image_dir", type=str, required=True,
-                        help="Directory containing the benchmark images.")
-    parser.add_argument("--classification_path", type=str, required=True,
-                        help="Path to benchmark/classification_result.json.")
+    parser.add_argument("--annotation_path", type=str,
+                        default=os.environ.get("ANNOTATION_PATH", "../benchmark/OSWorld-G.json"),
+                        help="Path to the annotation file (default: ../benchmark/OSWorld-G.json).")
+    parser.add_argument("--image_dir", type=str,
+                        default=os.environ.get("IMAGE_DIR", "../benchmark/images"),
+                        help="Directory containing the benchmark images (default: ../benchmark/images).")
+    parser.add_argument("--classification_path", type=str,
+                        default=os.environ.get("CLASSIFICATION_PATH", "../benchmark/classification_result.json"),
+                        help="Path to the classification result file "
+                             "(default: ../benchmark/classification_result.json).")
     parser.add_argument("--model_path", type=str, default=None,
                         help="Model checkpoint to serve. Omit to reuse an already running server.")
     parser.add_argument("--model_name", type=str, default="holo",
@@ -429,18 +472,30 @@ if __name__ == "__main__":
                         help="Override the OpenAI base_url (default: http://localhost:<port>/v1).")
     parser.add_argument("--api_key", type=str, default="token-abc123")
     parser.add_argument("--max_model_len", type=int, default=16384)
+    parser.add_argument("--vllm_extra", type=str,
+                        default=os.environ.get("VLLM_EXTRA", ""),
+                        help="Extra flags forwarded verbatim to `vllm serve`, "
+                             "e.g. --vllm_extra \"--gpu-memory-utilization 0.95\".")
     parser.add_argument("--max_tokens", type=int, default=128)
     parser.add_argument("--max_workers", type=int, default=8,
                         help="Concurrent requests to the server (default: 8).")
+    parser.add_argument("--max_num_seqs", type=int, default=64,
+                        help="Server-side batch width, forwarded to vllm serve "
+                             "(default: 64, comfortably above --max_workers).")
     parser.add_argument("--refusal_type", type=str, default="explicit",
-                        choices=["explicit", "implicit"],
-                        help="'explicit' lets the model answer null on the 54 refusal items; "
-                             "'implicit' uses the documented schema verbatim (default: explicit).")
+                        choices=["explicit", "implicit", "conditional"],
+                        help="'explicit' appends a refusal clause to the documented prompt; "
+                             "'conditional' reframes it so presence is decided first; "
+                             "'implicit' uses the documented prompt and schema verbatim, "
+                             "which scores 0 on the refusal items (default: explicit).")
     parser.add_argument("--structured_output", type=str, default="json_schema",
                         choices=["json_schema", "guided_json", "none"],
                         help="How to constrain the JSON output on the server side.")
     parser.add_argument("--use_cache", action="store_true",
                         help="Reuse cached model responses between runs.")
+    parser.add_argument("--cache_dir", type=str,
+                        default=os.environ.get("CACHE_DIR", "."),
+                        help="Where the response cache is written (default: cwd).")
     parser.add_argument("--output_path", type=str, default=None,
                         help="Where to write per-item predictions (JSON).")
     args = parser.parse_args()
@@ -450,7 +505,8 @@ if __name__ == "__main__":
     process = None
     if args.model_path:
         process = start_vllm_service(
-            args.model_path, args.port, args.model_name, args.max_model_len
+            args.model_path, args.port, args.model_name, args.max_model_len,
+            args.max_num_seqs, args.vllm_extra,
         )
         if not wait_for_service(args.port):
             print(f"Failed to start VLLM service on port {args.port}")
@@ -474,6 +530,7 @@ if __name__ == "__main__":
             model=model,
             use_cache=args.use_cache,
             output_path=args.output_path,
+            cache_dir=args.cache_dir,
         )
 
         results = runner.evaluate()
