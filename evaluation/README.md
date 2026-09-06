@@ -70,50 +70,70 @@ OSWorld-G groups its items by GUI element type -- `benchmark/buckets.json` maps
 `Label` to `text_matching`, `Icon`/`Image`/`Button` to `element_recognition`, and
 so on -- and the annotations carry no field saying which application is on screen.
 
-`benchmark/app_labels.json` adds one. Every one of the 251 screenshots was
-labelled by reading the application name out of the GNOME top bar in the image
-itself, so these are read labels rather than keywords guessed from the
-instruction text. The categories are the eight OSWorld domains, and `null` for
-items in applications outside that set:
+`benchmark/task_labels.json` adds one, per task rather than per screenshot. The
+per-screenshot shortcut does not survive contact with the data: a screenshot can
+hold two applications -- GIMP full-screen with the Settings window over it, a
+Writer document behind a Chrome window -- and the tasks on it then belong to
+different ones. Every one of the 564 tasks was reviewed by hand with its
+instruction and its target box drawn on the screenshot, which is what settles
+those. The categories are the eight OSWorld domains:
 
-| category | items | screenshots |
-| --- | ---: | ---: |
-| Chrome | 94 | 51 |
-| LibreOffice Impress | 90 | 31 |
-| LibreOffice Calc | 81 | 29 |
-| GIMP | 77 | 29 |
-| LibreOffice Writer | 42 | 23 |
-| OS | 41 | 19 |
-| VsCode | 39 | 21 |
-| VLC | 38 | 19 |
-| `null` | 62 | 29 |
-| **total** | **564** | **251** |
+| category | tasks |
+| --- | ---: |
+| Chrome | 75 |
+| LibreOffice Impress | 85 |
+| LibreOffice Calc | 77 |
+| GIMP | 76 |
+| LibreOffice Writer | 36 |
+| OS | 54 |
+| VsCode | 36 |
+| VLC | 29 |
+| `null` | 96 |
+| **total** | **564** |
 
-`OS` covers the desktop environment itself: terminal (13), file manager (10),
-settings (10), the Activities overview (6) and the login screen (2). `null`
-covers Thunderbird (24), Evince (20), Gedit (6), Totem (5), Ubuntu Software (3),
-Image Viewer (3) and the LibreOffice Start Center (1) -- note that Thunderbird is
-a domain of its own in OSWorld, so promote it to a category of its own if you
-are comparing against numbers from there.
+`OS` is the desktop environment itself -- terminal, file manager, settings, the
+dock and the Activities overview -- including tasks whose target is the dock icon
+of an application rather than the application. `null` is everything outside the
+eight: Thunderbird, Evince, Gedit, Totem and friends, plus all 54
+refusal tasks, since nothing on screen answers those. That last part is worth
+knowing: it leaves the eight real categories with a ceiling of 100%, so
+`--exclude_refusal` is optional rather than necessary when reading them.
+
+`validate_labels.py` is the review tool those labels came out of, and the way to
+revise them. It shows one task per screen -- instruction, target box, top bar at
+native resolution, current label -- and you press `a` to approve or `1`..`8` /
+`0` to replace; `A` applies the label you just chose to every task on that
+screenshot. It reads and rewrites `task_labels.json`, records what you have seen
+in `task_labels_review.json`, backs both up to `.bak` on save, and reopens at the
+first task with no verdict:
+
+```bash
+uv run --with opencv-python --with numpy validate_labels.py
+```
+
+Add `--only null` to review just the unlabelled tasks, or `--only GIMP` to sweep a
+single category.
 
 `accuracy_by_app.py` joins those labels with the `*_preds.json` a run writes:
 
 ```bash
-python accuracy_by_app.py /results/dense_preds.json --exclude_refusal
+python accuracy_by_app.py /results/dense_preds.json
 ```
 
 Pass two files to get them side by side with a per-application delta, which is
 the view worth having when comparing a pruned checkpoint against its baseline:
 
 ```bash
-python accuracy_by_app.py /results/dense_preds.json /results/pruned_preds.json --exclude_refusal
+python accuracy_by_app.py /results/dense_preds.json /results/pruned_preds.json
 ```
 
-`--exclude_refusal` drops the 54 refusal items. They are worth dropping from a
-comparison: answering one correctly requires the model to decline to point at
-anything, and grounding-specialised models simply do not -- Holo-3.1-35B-A3B
-scores 0/54, emitting a valid coordinate every time, with or without a refusal
-clause in the prompt and with or without constrained decoding.
+`--exclude_refusal` drops the 54 refusal tasks entirely. They all sit under
+`null`, so the eight categories are unaffected either way; what the flag changes
+is the total. Worth knowing about them: answering one correctly requires the
+model to decline to point at anything, and grounding-specialised models simply do
+not -- Holo-3.1-35B-A3B scores 0/54, emitting a valid coordinate every time, with
+or without a refusal clause in the prompt and with or without constrained
+decoding.
 
 ## Other closed source models on OSWorld-G
 You can also evaluate other closed-source models on OSWorld-G. An example with Operator is provided in `operator_osworld_g.py`.
