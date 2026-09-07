@@ -95,9 +95,9 @@ those. The categories are the eight OSWorld domains:
 dock and the Activities overview -- including tasks whose target is the dock icon
 of an application rather than the application. `null` is everything outside the
 eight: Thunderbird, Evince, Gedit, Totem and friends, plus all 54
-refusal tasks, since nothing on screen answers those. That last part is worth
-knowing: it leaves the eight real categories with a ceiling of 100%, so
-`--exclude_refusal` is optional rather than necessary when reading them.
+refusal tasks, since nothing on screen answers those. That last part is what
+leaves the eight real categories with a ceiling of 100%: no task inside them is
+unanswerable.
 
 `validate_labels.py` is the review tool those labels came out of, and the way to
 revise them. It shows one task per screen -- instruction, target box, top bar at
@@ -127,13 +127,14 @@ the view worth having when comparing a pruned checkpoint against its baseline:
 python accuracy_by_app.py /results/dense_preds.json /results/pruned_preds.json
 ```
 
-`--exclude_refusal` drops the 54 refusal tasks entirely. They all sit under
-`null`, so the eight categories are unaffected either way; what the flag changes
-is the total. Worth knowing about them: answering one correctly requires the
+The total covers the eight categories only: the `null` tasks are reported on
+their own line and left out of it, since they are not in any category being
+measured. That also settles the refusal tasks, all 54 of which are labelled
+`null` -- worth knowing about them anyway: answering one correctly requires the
 model to decline to point at anything, and grounding-specialised models simply do
-not -- Holo-3.1-35B-A3B scores 0/54, emitting a valid coordinate every time, with
+not. Holo-3.1-35B-A3B scores 0/54, emitting a valid coordinate every time, with
 or without a refusal clause in the prompt and with or without constrained
-decoding.
+decoding. Pass `--include_null` to fold them all back into the total.
 
 ## Other closed source models on OSWorld-G
 You can also evaluate other closed-source models on OSWorld-G. An example with Operator is provided in `operator_osworld_g.py`.
